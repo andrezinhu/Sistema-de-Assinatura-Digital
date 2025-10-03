@@ -1,0 +1,25 @@
+Usuário faz login (2FA).
+
+Sobe o PDF (ou o sistema já tem o contracheque). Backend calcula originalHash = SHA256(pdfBytes) e cria documentId.
+
+Frontend mostra a página (PDF.js) e o usuário clica onde quer a assinatura -> pega page, relX, relY e tamanho relativo relW/relH.
+
+Usuário desenha a rubrica no canvas e clica em confirmar. Envia documentId, page, relX/relY/relW/relH, sigImageBase64 ao backend.
+
+Backend:
+
+valida sessão/2FA,
+
+re-calcula hash do PDF e confere originalHash,
+
+converte coords relativas para pontos PDF usando page.getSize(),
+
+embute a assinatura com pdf-lib,
+
+salva novo PDF (signedPdf) e calcula signedHash,
+
+grava entrada de auditoria (user, timestamps, ip, userAgent, originalHash, signedHash, coords, signatureImageHash),
+
+(opcional) chama TSA para carimbar signedHash.
+
+Sistema notifica por e-mail com link para o PDF assinado + JSON de auditoria.

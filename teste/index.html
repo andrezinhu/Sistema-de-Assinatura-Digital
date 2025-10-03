@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Assinar PDF (interno)</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    #viewer { position: relative; display:inline-block; }
+    #overlay { position:absolute; left:0; top:0; right:0; bottom:0; }
+    .sig-preview { border:1px dashed #666; background:white; position:absolute; }
+    #canvas-sign { border:1px solid #ccc; width:100%; height:200px; touch-action: none; }
+  </style>
+</head>
+<body class="bg-light">
+  <div class="container py-4">
+    <h4>Assinar PDF — exemplo</h4>
+
+    <!-- Area de upload (ou pode já ter o PDF no servidor) -->
+    <div class="mb-3">
+      <input id="file-input" type="file" accept="application/pdf" class="form-control">
+    </div>
+
+    <div id="viewer" class="mb-3"></div>
+
+    <!-- Modal para desenhar assinatura -->
+    <div class="modal" tabindex="-1" id="sigModal">
+      <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title">Desenhe sua assinatura</h5>
+            <button type="button" class="btn-close" onclick="closeModal()"></button>
+          </div>
+          <div class="modal-body">
+            <canvas id="canvas-sign" width="800" height="200"></canvas>
+          </div>
+          <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="clearCanvas()">Limpar</button>
+            <button class="btn btn-primary" onclick="confirmSignature()">Confirmar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.8.162/pdf.min.js"></script>
+<script>
+const pdfjsLib = window['pdfjsLib'];
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.8.162/pdf.worker.min.js';
+
+let pdfDoc = null;
+let currentPage = 1;
+let scale = 1.0;
+let canvasEl = null;
+
+document.getElementById('file-input').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const arrayBuffer = await file.arrayBuffer();
+  loadPdf(arrayBuffer);
+});
+
+async function loadPdf(arrayBuffer) {
+  pdfDoc = await pdfjsLib.getDocument({data: arrayBuffer}).promise;
+  renderPage(1, arrayBuffer);
+}
+
+async function renderPage(pageNum, arrayBuffer) {
+  const page = await pdfDoc.getPage(pageNum);
+  const viewport = page.getViewport({scale: 1.2});
+  scale = 1.2;
+  // cria canvas para renderizar
+  const canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  canvas.style.maxWidth = '100%';
+  const ctx = canvas.getContext('2d');
+  const renderContext = { canvasContext: ctx, viewport };
+  await page.render(renderContext).promise;
+
+  const viewer = document.getElementById('viewer');
+  viewer.innerHTML = '';
+  viewer.appendChild(canvas);
+
+  // overlay para capturar clicks relativos
+  const overlay = document.createElement('div');
+  overlay.id = 'overlay';
+  overlay.style.width = canvas.width + 'px';
+  overlay.style.height = canvas.height + 'px';
+  overlay.addEventListener('click', (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+    const relX = x / rect.width;
+    const relY = y / rect.height;
+    // largura/altura de preview - aqui 20% largura e 10% altura
+    const relW = 0.20;
+    const relH = 0.10;
+    // mostrar preview (opcional)
+    showPreview(rect.left + x, rect.top + y, rect.width * relW, rect.height * relH);
+    // abrir modal de assinatura
+    openModal({ page: pageNum, relX, relY, relW, relH, pageWidth: viewport.width, pageHeight: viewport.height, pdfArrayBuffer: null });
+  });
+  canvas.parentElement.style.position = 'relative';
+  canvas.parentElement.appendChild(overlay);
+}
+
+function showPreview(left, top, w, h) {
+  // remove existing
+  const old = document.querySelector('.sig-preview');
+  if(old) old.remove();
+  const div = document.createElement('div');
+  div.className = 'sig-preview';
+  div.style.left = (left - document.getElementById('viewer').getBoundingClientRect().left) + 'px';
+  div.style.top = (top - document.getElementById('viewer').getBoundingClientRect().top) + 'px';
+  div.style.width = w + 'px';
+  div.style.height = h + 'px';
+  document.getElementById('viewer').appendChild(div);
+}
+
+/* ---------- Modal + Canvas signature ---------- */
+let modalOpen = false;
+const sigModal = document.getElementById('sigModal');
+const sigCanvas = document.getElementById('canvas-sign');
+const sctx = sigCanvas.getContext('2d');
+let drawing = false;
+let signMeta = null; // guarda page/coords
+
+function openModal(meta) {
+  signMeta = meta;
+  // reset canvas
+  sctx.clearRect(0,0,sigCanvas.width,sigCanvas.height);
+  sigModal.style.display = 'block';
+  modalOpen = true;
+}
+
+function closeModal() {
+  sigModal.style.display = 'none';
+  modalOpen = false;
+}
+
+function clearCanvas(){
+  sctx.clearRect(0,0,sigCanvas.width,sigCanvas.height);
+}
+
+// events mouse
+sigCanvas.addEventListener('mousedown', (e) => {
+  drawing = true;
+  sctx.beginPath();
+  const rect = sigCanvas.getBoundingClientRect();
+  sctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+});
+sigCanvas.addEventListener('mouseup', ()=> drawing = false);
+sigCanvas.addEventListener('mousemove', (e) => {
+  if(!drawing) return;
+  const rect = sigCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  sctx.lineWidth = 2; sctx.lineCap = 'round';
+  sctx.lineTo(x,y); sctx.stroke(); sctx.beginPath(); sctx.moveTo(x,y);
+});
+// touch
+sigCanvas.addEventListener('touchstart', (e)=> { e.preventDefault(); drawing=true; const t=e.touches[0]; const r=sigCanvas.getBoundingClientRect(); sctx.beginPath(); sctx.moveTo(t.clientX-r.left, t.clientY-r.top);});
+sigCanvas.addEventListener('touchend', ()=> drawing=false);
+sigCanvas.addEventListener('touchmove', (e)=> { e.preventDefault(); if(!drawing) return; const t=e.touches[0]; const r=sigCanvas.getBoundingClientRect(); const x=t.clientX-r.left, y=t.clientY-r.top; sctx.lineWidth=2; sctx.lineCap='round'; sctx.lineTo(x,y); sctx.stroke(); sctx.beginPath(); sctx.moveTo(x,y); });
+
+async function confirmSignature() {
+  // pega base64 da assinatura (redimensionar se quiser)
+  const dataUrl = sigCanvas.toDataURL('image/png');
+  // envia ao backend: documentId (aqui vamos mandar como 'uploaded' temporário), page, rel coords
+  // No exemplo simplificado, faremos upload do PDF antes e o backend terá o documentId.
+  const payload = {
+    // colocar documentId real na sua app. Aqui só demo:
+    documentId: 'TEMP_DOC_1',
+    page: signMeta.page,
+    relX: signMeta.relX,
+    relY: signMeta.relY,
+    relW: signMeta.relW,
+    relH: signMeta.relH,
+    sigImage: dataUrl
+  };
+  // enviar para backend (ajuste URL)
+  const resp = await fetch('/api/sign', {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json' },
+    body: JSON.stringify(payload)
+  });
+  const json = await resp.json();
+  if(resp.ok) {
+    alert('Documento assinado com sucesso! Baixe em: ' + json.signedUrl);
+    closeModal();
+  } else {
+    alert('Erro: ' + json.message);
+  }
+}
+</script>
+<script src="servidor.js"></script>
+
+<script src="https://unpkg.com/pdf-lib/dist/pdf-lib.min.js"></script>
+<script>
+async function confirmSignature() {
+  const dataUrl = sigCanvas.toDataURL('image/png');
+  const existingPdfBytes = await fetch('meu.pdf').then(res => res.arrayBuffer());
+
+  const pdfDoc = await PDFLib.PDFDocument.load(existingPdfBytes);
+  const pngImage = await pdfDoc.embedPng(dataUrl);
+
+  const pages = pdfDoc.getPages();
+  const page = pages[signMeta.page - 1];
+
+  const { width, height } = page.getSize();
+  const x = signMeta.relX * width;
+  const y = height - (signMeta.relY * height);
+  const w = signMeta.relW * width;
+  const h = signMeta.relH * height;
+
+  page.drawImage(pngImage, { x, y, width: w, height: h });
+
+  const signedPdfBytes = await pdfDoc.save();
+  const blob = new Blob([signedPdfBytes], { type: "application/pdf" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "documento_assinado.pdf";
+  a.click();
+}
+</script>
+
+
+</body>
+</html>
